@@ -7,15 +7,19 @@ authors = [
 ]
 license = "MIT"
 requires-python = ">=3.9,<3.13"
-dependencies = [
-    "torch>=2.0.0",
-    "torchvision>=0.15.0",
-]
 
 [tool.poetry]
-package-mode = false
+packages = [{ include = "*", from = "src" }]
+
+[[tool.poetry.source]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+priority = "explicit"
+
+[tool.poetry.dependencies]
+torch = { version = ">=2.0.0", source = "pytorch-cu121" }
+torchvision = { version = ">=0.15.0", source = "pytorch-cu121" }
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
-
+build-backend = "poetry.core.masonry.api" 

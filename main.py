@@ -1,5 +1,5 @@
-from device import *
+from device import DeviceProvider
 
 device_info = DeviceProvider();
 
-print("test")
+print(device_info.get_device_info())
