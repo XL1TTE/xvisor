@@ -1,0 +1,68 @@
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.venv/
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing & Type Checking
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.pytype/
+.ruff_cache/
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.nvim/
+
+# Deep Learning weights, checkpoints & outputs
+*.pth
+*.pt
+*.onnx
+*.engine
+checkpoints/
+runs/
+logs/
+exports/
+
+# Cache directories for downloads (e.g. YouTube, remote datasets)
+.cache/
+cache/
+
+# Datasets (never commit video files or large annotation datasets)
+/data/
+datasets/
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.zip
+*.tar
+*.tar.gz
+*.7z
