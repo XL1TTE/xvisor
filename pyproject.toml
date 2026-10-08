@@ -6,7 +6,7 @@ authors = [
     {name = "XL1TTE",email = "xl1tte.dev@gmail.com"}
 ]
 license = "MIT"
-requires-python = ">=3.9,<3.13"
+requires-python = ">=3.10,<3.13"
 
 [tool.poetry]
 packages = [{ include = "*", from = "src" }]
