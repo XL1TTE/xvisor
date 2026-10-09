@@ -46,6 +46,7 @@ htmlcov/
 *.pt
 *.onnx
 *.engine
+.xvisor/
 checkpoints/
 runs/
 logs/

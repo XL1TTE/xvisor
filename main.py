@@ -1,5 +1,4 @@
-from device import DeviceProvider
+from cli import app
 
-device_info = DeviceProvider();
-
-print(device_info.get_device_info())
+if __name__ == "__main__":
+    app()

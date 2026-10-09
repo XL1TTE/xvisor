@@ -20,9 +20,13 @@ priority = "explicit"
 torch = { version = ">=2.0.0", source = "pytorch-cu121" }
 torchvision = { version = ">=0.15.0", source = "pytorch-cu121" }
 onnx = ">=1.14.0"
+typer = ">=0.9.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
+
+[tool.poetry.scripts]
+xvisor = "cli:app"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
