@@ -6,6 +6,11 @@ from .checkpoint import (
     CheckpointMetadata,
 )
 from .trainer import Trainer
+from .evaluation import (
+    EvaluationConfig,
+    EvaluationMetrics,
+    DetectorEvaluator,
+)
 
 __all__ = [
     "TrainingConfig",
@@ -15,4 +20,7 @@ __all__ = [
     "CheckpointPayload",
     "CheckpointMetadata",
     "Trainer",
+    "EvaluationConfig",
+    "EvaluationMetrics",
+    "DetectorEvaluator",
 ]

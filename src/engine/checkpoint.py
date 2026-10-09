@@ -48,7 +48,7 @@ class CheckpointManager:
         if not checkpoint_path.exists():
             raise FileNotFoundError(f"Checkpoint file does not exist: '{checkpoint_path}'")
 
-        raw_dict = torch.load(checkpoint_path, map_location=device)
+        raw_dict = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
         meta_dict = raw_dict["metadata"]
         metadata = CheckpointMetadata(
@@ -72,7 +72,7 @@ class CheckpointManager:
         if not checkpoint_path.exists():
             raise FileNotFoundError(f"Checkpoint file does not exist: '{checkpoint_path}'")
 
-        raw_dict = torch.load(checkpoint_path, map_location=torch.device("cpu"))
+        raw_dict = torch.load(checkpoint_path, map_location=torch.device("cpu"), weights_only=False)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         torch.save(raw_dict["model_state_dict"], output_path)
