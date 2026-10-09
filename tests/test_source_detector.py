@@ -5,32 +5,7 @@ from data.sources import (
     SourceDetector,
     LocalFile,
     LocalDirectory,
-    YoutubeUrl,
-    GoogleDriveUri,
 )
-
-
-def test_detect_youtube_standard_url() -> None:
-    detector = SourceDetector.default()
-    result = detector.detect("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-
-    assert isinstance(result, YoutubeUrl)
-    assert result.url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-
-
-def test_detect_youtube_short_url() -> None:
-    detector = SourceDetector.default()
-    result = detector.detect("https://youtu.be/dQw4w9WgXcQ")
-
-    assert isinstance(result, YoutubeUrl)
-    assert result.url == "https://youtu.be/dQw4w9WgXcQ"
-
-
-def test_detect_google_drive() -> None:
-    detector = SourceDetector.default()
-    result = detector.detect("https://drive.google.com/file/d/12345/view")
-
-    assert isinstance(result, GoogleDriveUri)
 
 
 def test_detect_local_directory(tmp_path: Path) -> None:

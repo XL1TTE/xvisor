@@ -15,15 +15,5 @@ class LocalDirectory:
     path: Path
 
 
-@dataclass(frozen=True)
-class YoutubeUrl:
-    url: str
-
-
-@dataclass(frozen=True)
-class GoogleDriveUri:
-    uri: str
-
-
-# Tagged Union of all recognized input sources
-InputSource = Union[LocalFile, LocalDirectory, YoutubeUrl, GoogleDriveUri]
+# Tagged union for local input sources
+InputSource = Union[LocalFile, LocalDirectory]
