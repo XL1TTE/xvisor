@@ -58,8 +58,10 @@ cd xvisor
 poetry install
 
 # 3. Verify installation & view commands
-poetry run python main.py --help
+poetry run xvisor --help
 ```
+
+> **Tip:** You can prefix commands with `poetry run xvisor ...`, or activate your virtual environment once (`source .venv/bin/activate` or `.\.venv\Scripts\Activate.ps1`) to run `xvisor` directly.
 
 ---
 
