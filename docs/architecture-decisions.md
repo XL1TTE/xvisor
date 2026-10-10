@@ -4,14 +4,14 @@ This document records the architectural choices evaluated during system design. 
 
 ---
 
-## 1. Tracking Paradigm
+## 1. Tracking Paradigm & System Boundary
 
 ### Context
 Multi-Object Tracking (MOT) in video requires identifying objects of interest in each frame and maintaining persistent identity labels across time.
 
 ### Options Considered
 
-#### Option A: Tracking-by-Detection (Selected)
+#### Option A: Tracking-by-Detection (Selected Paradigm)
 - **Theoretical Mechanism**: The task is split into two independent, sequential sub-problems:
   1. *Detection*: An independent detector processes each frame $t$ as an isolated still image to output candidate bounding boxes $B_t = \{b_1, b_2, \dots, b_n\}$.
   2. *Data Association*: An independent tracking algorithm matches detections from frame $t$ to existing track trajectories from frame $t-1$ based on spatial proximity, motion estimation, and visual similarity.
@@ -41,45 +41,16 @@ Multi-Object Tracking (MOT) in video requires identifying objects of interest in
   - Long training schedules and high data hunger.
   - Difficult to inspect or debug when associations fail.
 
-### Decision & Rationale
-**Selected: Option A (Tracking-by-Detection)**.  
-It provides clear architectural boundaries, allows the detector to be trained independently on image data, simplifies debugging and testing, and avoids the heavy hardware constraints and multi-task loss balancing issues inherent to joint or transformer-based models.
+### Decision & Scope Boundary
+**Selected: Option A (Tracking-by-Detection) with a strict Model Forge boundary**.  
+- **What this package builds & exports**: The neural network models:
+  1. **`human_detector.onnx`** (Faster R-CNN for bounding boxes)
+  2. **`person_reid.onnx`** (MobileNetV3 for visual appearance embeddings)
+- **What lives in the consumer app (Vue/Backend)**: The video playback loop and association heuristics (Kalman filter / Hungarian matching) execute in the external application via ONNX Runtime. This package trains and evaluates the models, but does not embed video player UI logic.
 
 ---
 
-## 2. Data Association Method
-
-### Context
-Within the Tracking-by-Detection paradigm, an algorithm must assign new detections in frame $t$ to active tracks from frame $t-1$.
-
-### Options Considered
-
-#### Option 1: Motion and Spatial Only (SORT / ByteTrack style)
-- **Theoretical Mechanism**: A Kalman Filter models the continuous velocity and position of each target. At frame $t$, the filter predicts the expected bounding box. dAssociation cost is calculated purely using spatial overlap (Intersection over Union, IoU) or generalized IoU (GIoU). Optimal assignment is solved via the Hungarian algorithm.
-- **Advantages**:
-  - Zero neural network overhead for the tracking step; executes in fractions of a millisecond on CPU.
-  - No training required for the tracker component.
-- **Disadvantages**:
-  - Susceptible to identity switches when two humans cross paths or occlude one another.
-  - Incapable of re-identifying targets that leave the frame or remain completely occluded for multiple seconds (motion-only models lose track continuity once the prediction drifts).
-
-#### Option 2: Motion + Visual Appearance (DeepSORT / BoT-SORT style) (Selected)
-- **Theoretical Mechanism**: Combines spatial motion estimation (Kalman Filter) with visual feature representations (Re-Identification / ReID network). For every detection, cropped image pixels are passed through a feature extractor to obtain a normalized 1D embedding vector $f \in \mathbb{R}^d$. The assignment cost between track $i$ and detection $j$ combines:
-  1. *Mahalanobis distance* (motion plausibility based on Kalman filter uncertainty).
-  2. *Cosine distance* between visual feature embeddings ($1 - \frac{f_i \cdot f_j}{\|f_i\| \|f_j\|}$).
-- **Advantages**:
-  - Robust identity preservation during crossing trajectories.
-  - Enables long-term re-identification: a person who exits and re-enters the scene can be recognized by appearance.
-- **Disadvantages**:
-  - Higher computational cost: running a convolutional network on every detected human crop introduces latency.
-
-### Decision & Rationale
-**Selected: Option 2 (Motion + Visual Appearance / DeepSORT style)**.  
-Visual embeddings provide necessary resilience against occlusions and trajectory crossings in crowded human scenes, yielding more reliable tracking behavior than motion-alone heuristics.
-
----
-
-## 3. Training Scope & Model Division
+## 2. Training Scope & Model Division
 
 ### Context
 With a two-component model (Detector + ReID Embedder), the scope of what gets trained must be defined.
@@ -90,17 +61,17 @@ With a two-component model (Detector + ReID Embedder), the scope of what gets tr
 - **Theoretical Mechanism**: Prepare two distinct datasets: a bounding box detection dataset and an identity-labeled person re-identification dataset (triplet loss / contrastive loss). Train both models independently.
 - **Trade-off**: High training workload and complex dataset preparation requirements.
 
-#### Approach 2: Train Detector, Use Pretrained ReID Network (Selected)
-- **Theoretical Mechanism**: Train or fine-tune the human detector on target domain imagery. Use an established, publicly available model pretrained on large-scale person re-identification benchmarks (e.g., Market-1501, DukeMTMC) for visual feature extraction.
+#### Approach 2: Train Detector, Export Pretrained ReID Network (Selected)
+- **Theoretical Mechanism**: Train or fine-tune the human detector on target domain imagery. Use an established, publicly available model pretrained on large-scale person re-identification benchmarks (e.g., Market-1501, ImageNet) for visual feature extraction.
 - **Trade-off**: ReID features are generic rather than fine-tuned to specific camera lighting, but the training pipeline remains focused, stable, and manageable.
 
 ### Decision & Rationale
 **Selected: Approach 2 (Train Detector, Pretrained ReID)**.  
-This allows full engineering focus on building a robust training loop, checkpointing engine, and evaluation suite for the detector without diluting effort across two independent training systems simultaneously.
+Allows full engineering focus on building a robust training loop, checkpointing engine, and evaluation suite for the detector without diluting effort across two independent training systems simultaneously.
 
 ---
 
-## 4. Framework & Level of Abstraction
+## 3. Framework & Level of Abstraction
 
 ### Options Considered
 
@@ -118,7 +89,7 @@ The goal is deep understanding and full control over training loops, state resum
 
 ---
 
-## 5. Detector Architecture
+## 4. Detector Architecture
 
 ### Options Considered
 
@@ -142,6 +113,24 @@ It provides standard, production-grade object detection in native PyTorch with c
 
 ---
 
+## 5. Dataset Ingestion & Lazy Frame Extraction
+
+### Options Considered
+
+#### Strategy 1: Eager In-Memory Frame Loading
+- Loads all video frames into memory as image arrays upon dataset initialization.
+- **Limitation**: A 1080p video at 30 FPS consumes ~10.8 GB per minute of footage, causing immediate Out-Of-Memory (OOM) crashes during training.
+
+#### Strategy 2: Lazy Indexed Frame Access via Functional Closures (Selected)
+- **Theoretical Mechanism**: Encapsulates frame retrieval inside an immutable `FrameProvider` (`total_frames: int`, `get_frame: Callable[[int], Image]`). Frames are decoded and read on-demand during batch creation and discarded immediately after forward pass.
+- **Advantages**: Constant memory consumption ($< 50 \text{ MB}$) regardless of dataset length or video resolution.
+
+### Decision & Rationale
+**Selected: Strategy 2 (`FrameProvider` Lazy Access)**.  
+Ensures scalable data loading across arbitrary video lengths and image directories.
+
+---
+
 ## 6. Dataset Format Support
 
 ### Options Considered
@@ -156,7 +145,7 @@ It provides standard, production-grade object detection in native PyTorch with c
 
 ### Decision & Rationale
 **Selected: Support both formats via an adapter interface**.  
-Supporting COCO JSON enables training on standard object detection datasets. Supporting MOTChallenge TXT enables evaluation on actual video tracking benchmarks. An abstract dataset interface decouples the engine from the underlying file structure.
+Supporting COCO JSON enables training on standard object detection datasets. Supporting MOTChallenge TXT enables training and evaluation on video sequences. An abstract dataset interface decouples the engine from the underlying file structure.
 
 ---
 
@@ -173,8 +162,7 @@ Supporting COCO JSON enables training on standard object detection datasets. Sup
   - `model_state_dict`: Neural network weights.
   - `optimizer_state_dict`: First and second moment buffers.
   - `scheduler_state_dict`: Current learning rate decay step.
-  - `epoch`: Last completed epoch index.
-  - `best_metric`: Validation performance record.
+  - `metadata`: Last completed epoch index, architecture name, class count.
 - **Advantages**: Training can be halted and resumed identically to an uninterrupted run. Also provides an export utility to strip non-weight metadata for inference deployment.
 
 ### Decision & Rationale
@@ -183,17 +171,26 @@ Essential for reliable, production-grade machine learning workflows.
 
 ---
 
-## 8. Decoupled Testing Strategy
+## 8. Session Management & MLOps Architecture
 
 ### Context
-Evaluating a tracking system requires measuring performance, but combining detection and tracking into a single evaluation creates ambiguity when diagnosing failures.
+Managing experiments, checkpoints, and export artifacts without polluting project directories or forcing users to track arbitrary file paths.
+
+### Options Considered
+
+#### Option A: Loose File Parameters
+- User manually passes `--checkpoint-path ./my_ckpt.pth` on every command.
+- **Drawback**: Error-prone, hard to manage multiple training runs, difficult for automated IPC.
+
+#### Option B: Isolated Workspace Sessions (Selected)
+- Organizes all runs inside `.xvisor/sessions/<session_id>/`:
+  - `metadata.json`: Tracks hyperparams, architecture, status, current epoch.
+  - `checkpoints/`: Automatically versions `checkpoint_epoch_N.pth`.
+  - `exports/`: Destination for `.onnx` outputs.
+- **Advantages**: Commands operate on clean `--session <id>` flags. Easy to query via `xvisor session --list` or `--json` IPC for external frontend dashboards.
 
 ### Decision & Rationale
-**Selected: Two independent evaluation pipelines**:
-1. **Detection Testing ($mAP$)**: Evaluates the detector on static test images. Measures Mean Average Precision at IoU thresholds ($mAP_{50}$, $mAP_{50:95}$). Identifies if the detector is missing humans or generating false positives.
-2. **Tracking Testing ($MOTA$, $IDF1$, $IDSW$)**: Evaluates the full pipeline on video sequences with ground-truth track IDs. Measures tracking consistency, trajectory fragmentation, and identity swaps over time.
-
-Decoupling these tests ensures clear attribution of errors: detection failures (poor box localization) vs. association failures (erratic track matching).
+**Selected: Option B (Workspace Sessions under `.xvisor/`)**.
 
 ---
 
@@ -213,12 +210,23 @@ The system dynamically queries `torch.cuda.is_available()`. If a CUDA GPU is pre
 - Requires the Python runtime, PyTorch installation, and original model definitions.
 - Not practical for embedding into external C++, C#, mobile, or web applications.
 
-#### Approach 2: Portable Format Export (ONNX / TorchScript) (Selected)
+#### Approach 2: Portable Format Export (ONNX) (Selected)
 - Translates the PyTorch model graph into **ONNX (Open Neural Network Exchange)**.
 - **Advantages**:
-  - ONNX models run in C++, C#, Go, Java, and JavaScript via **ONNX Runtime** without a Python interpreter.
-  - Allows hardware acceleration using vendor engines like NVIDIA TensorRT or Intel OpenVINO.
+  - `human_detector.onnx` and `person_reid.onnx` run in C++, C#, Go, Java, Node.js, and browser WebAssembly via **ONNX Runtime** without a Python interpreter.
+  - Supports hardware acceleration via NVIDIA TensorRT, DirectML, and WebGPU.
 
 ### Decision & Rationale
 **Selected: Approach 2 (Export to ONNX)**.  
 Provides a clean bridge between model training in Python and deployment in external applications.
+
+---
+
+## 11. Automated CI Testing Strategy
+
+### Context
+Guaranteeing regression safety across all components on every commit.
+
+### Decision & Rationale
+**Selected: Linux-based CI Runner (`ci.yml`) on `ubuntu-latest`**.
+Runs the full `pytest` suite across data ingestion, model factories, session persistence, evaluation metrics, and ONNX export. Employs Poetry virtual environment caching keyed on `poetry.lock` to maintain sub-30-second turnaround times.

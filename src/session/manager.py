@@ -29,9 +29,7 @@ class SessionManager:
         return self._get_session_dir(session_id) / "metadata.json"
 
     def create_session(self, config: SessionConfig) -> SessionMetadata:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_suffix = uuid.uuid4().hex[:6]
-        session_id = f"sess_{timestamp}_{unique_suffix}"
+        session_id = str(uuid.uuid4())
 
         session_dir = self._get_session_dir(session_id)
         session_dir.mkdir(parents=True, exist_ok=True)

@@ -14,7 +14,10 @@ def test_session_creation(tmp_path: Path) -> None:
         )
     )
 
-    assert meta.session_id.startswith("sess_")
+    import uuid
+
+    # Verify standard UUID format
+    assert uuid.UUID(meta.session_id)
     assert meta.name == "test_experiment"
     assert meta.architecture == "mobilenet_v3"
     assert meta.status == "created"

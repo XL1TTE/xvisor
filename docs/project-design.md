@@ -1,138 +1,117 @@
-# Project Design: Human Video Tracking System
+# Project Design: Human Detection & ReID Model Forge (`xvisor`)
 
 ## 1. System Overview
 
-This system is an engineering framework for training, evaluating, maintaining, and exporting computer vision models for **Multi-Object Tracking (MOT) of humans in video**.
+`xvisor` is an engineering platform and MLOps CLI tool designed to **train, evaluate, and export** computer vision models for human detection and visual re-identification (ReID).
 
-The core focus of this system is **lifecycle management of tracking models**:
-- Training object detection models from scratch or from existing checkpoints.
-- Persisting complete training states to allow seamless session resumption.
-- Decoupled testing pipelines to evaluate Detection ($mAP$) and Tracking ($MOTA$, $IDF1$) independently.
-- Exporting trained models to portable formats (e.g., ONNX) for deployment in external applications across different programming languages and runtimes.
-- Providing user interfaces that support both scriptable automation and interactive guided execution.
+The primary purpose of this tool is to act as a **Model Forge**:
+- It produces production-ready **`.onnx` neural network artifacts** (`human_detector.onnx` and `person_reid.onnx`).
+- Downstream applications (such as a Vue/Node.js web app, C++, or C# applications) consume these exported models directly via ONNX Runtime to perform live multi-object tracking and video inference.
+- Model lifecycle management is handled via **Sessions** isolated inside a dedicated `.xvisor/` workspace.
+- The CLI provides human-readable output as well as a `--json` IPC streaming mode for integration with external host processes.
 
 ---
 
-## 2. Abstract System Architecture
+## 2. System Architecture
 
-The architecture is organized into logical subsystems with decoupled responsibilities:
+The architecture is organized into decoupled layers:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        User Interface Layer                            │
-│           [Scriptable CLI Subcommands]   [Interactive TUI]            │
+│                        User Interface & IPC Layer                      │
+│            [Typer CLI]    [--json Structured IPC Stream]               │
+│               session | train | test | export                          │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        Execution Engine                                │
-│  ┌────────────────────┐ ┌────────────────────┐ ┌─────────────────────┐ │
-│  │   Training Engine  │ │  Detection Tester  │ │   Tracking Tester   │ │
-│  └─────────┬──────────┘ └─────────┬──────────┘ └──────────┬──────────┘ │
-│            │                      │                       │            │
-│  ┌─────────┴──────────┐           │            ┌──────────┴──────────┐ │
-│  │ Checkpoint Manager │           │            │    Model Exporter   │ │
-│  └────────────────────┘           │            └─────────────────────┘ │
-└───────────────────┬───────────────┴───────────────────────┬────────────┘
-                    │                                       │
-                    ▼                                       ▼
-┌───────────────────────────────────────┐ ┌──────────────────────────────┐
-│             Data Layer                │ │         Model Layer          │
-│  - Dataset Ingestion Adapters         │ │  - Object Detector           │
-│    (COCO JSON, MOT TXT)               │ │  - Appearance ReID Embedder  │
-│  - Data Augmentation & Preprocessing  │ │  - Tracking Associator       │
-│  - Batch Loading & Collation          │ │    (Motion + Visual Matching)│
-└───────────────────────────────────────┘ └──────────────────────────────┘
+│                        Session & MLOps Layer                           │
+│  - SessionManager: Manages isolated workspace under .xvisor/           │
+│  - Storage Hierarchy:                                                  │
+│      .xvisor/sessions/<session_id>/                                    │
+│        ├── metadata.json       (hyperparameters, status, metrics)      │
+│        ├── checkpoints/        (full training session .pth files)      │
+│        └── exports/            (exported .onnx models)                 │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Execution Engine Layer                          │
+│  ├── Trainer             : Forward/backward loop, device management    │
+│  ├── CheckpointManager   : Full session persistence & resumption       │
+│  ├── DetectorEvaluator   : Frame-level mAP calculation (50 & 50:95)    │
+│  └── ModelExporter       : PyTorch -> ONNX (dynamic batch/spatial axes)│
+└───────────────┬───────────────────────────────────────┬────────────────┘
+                │                                       │
+                ▼                                       ▼
+┌───────────────────────────────┐       ┌────────────────────────────────┐
+│         Data Pipeline         │       │          Model Layer           │
+│  ├── SourceDetector (local)   │       │  ├── Detector (Faster R-CNN)   │
+│  ├── LocalFetcher (verify)    │       │  │   - MobileNetV3 / ResNet50  │
+│  ├── MediaClassifier          │       │  │   - Custom 2-class head     │
+│  ├── FrameProvider (lazy)     │       │  └── ReIDModel (MobileNetV3)   │
+│  │   (dir, video, zip)        │       │      - L2-normalized 576D      │
+│  ├── AnnotationParser         │       │        embedding vectors       │
+│  │   (COCO JSON, MOT TXT)     │       └────────────────────────────────┘
+│  └── TrackingDataset (PyTorch)│
+└───────────────────────────────┘
 ```
 
 ---
 
 ## 3. Subsystem Specifications
 
-### 3.1 User Interface Subsystem
-Provides two entry modes:
-1. **Scriptable Command-Line Interface (CLI)**: Enables non-interactive execution with structured subcommands (`train`, `resume`, `test-detection`, `test-tracking`, `export`). Suitable for automated scripts and headless environments.
-2. **Interactive Terminal User Interface (TUI)**: A menu-driven flow that interactively prompts for actions, dataset paths, checkpoint files, and hyperparameters with validation.
+### 3.1 Session Management Subsystem (`src/session/`)
+- Encapsulates every training experiment inside `.xvisor/sessions/<session_id>/`.
+- Tracks session states (`created`, `training`, `completed`, `resuming`), epochs, loss metrics, and architecture settings.
+- Automatically discovers the latest checkpoint when resuming.
 
-### 3.2 Data Ingestion & Transformation Subsystem
-Abstracts data loading to support multiple annotation schemes without changing engine logic:
-- **Annotation Adapters**:
-  - *COCO Format Adapter*: Parses standard JSON annotations containing image metadata, bounding box coordinates, and category labels.
-  - *MOT Format Adapter*: Parses text-based sequence annotations containing frame indices, object IDs, and spatial boxes.
-- **Preprocessing Pipeline**: Resizing, normalization, and training data augmentations (e.g., flips, photometric adjustments).
-- **Batch Generator**: Combines images and variable-length bounding box targets into tensor batches.
+### 3.2 Model Subsystem (`src/detector/`, `src/reid/`)
+- **Faster R-CNN Detector**: Two-stage detector with custom 2-class box predictor (Class 0: background, Class 1: human). Supports MobileNetV3 and ResNet50 backbones.
+- **ReID Feature Extractor**: MobileNetV3-based convolutional embedder taking image patches $[B, 3, 128, 64]$ and outputting L2-normalized 576-dimensional embedding vectors for person appearance discrimination.
 
-### 3.3 Model & Tracking Subsystem
-Implements the multi-stage tracking pipeline:
-- **Human Detector**: Two-stage deep neural network that locates human bounding boxes and confidence scores within single video frames.
-- **Appearance Feature Extractor (ReID)**: A deep convolutional network that maps cropped person image patches to normalized 1D embedding vectors.
-- **State Estimator (Kalman Filter)**: Maintains position, scale, and velocity vectors for each tracked target, projecting expected locations into subsequent frames.
-- **Data Associator**: Computes cost matrices combining spatial/motion distance and visual cosine similarity. Solves the bipartite matching problem to match existing tracks with new detections, managing track birth, confirmation, and deletion.
+### 3.3 Data Pipeline Subsystem (`src/data/`)
+- **Source Detection**: Matches input strings into strongly-typed `LocalFile` or `LocalDirectory` entities.
+- **Media Classification & Frame Access**: Classifies inputs into `ImageDirectoryMedia`, `VideoFileMedia`, or `ArchiveMedia`. Provides a lazy `FrameProvider` (`get_frame(index) -> PIL Image`) to keep memory footprint under a few megabytes regardless of video size.
+- **Annotation Parsing**: Parses COCO `.json` and MOT `.txt` ground-truth files into normalized `[x1, y1, x2, y2]` coordinates.
+- **PyTorch Integration**: `TrackingDataset` and `collate_tracking_batch` format variable-length targets into PyTorch batches.
 
-### 3.4 Execution Engine Subsystem
-Orchestrates training, evaluation, and persistence:
-- **Training Engine**: Drives forward passes, computes multitask losses (classification and bounding box regression), performs backpropagation, and steps optimizers and schedulers. Automatically binds to available GPU compute or falls back to CPU.
-- **Checkpoint Manager**: Serializes and deserializes model weights, optimizer momentum buffers, learning rate scheduler state, epoch counters, and validation metrics. Manages both full-state checkpoints (for resumption) and lightweight models (for inference).
-- **Detection Evaluator**: Evaluates frame-level detector performance independently from tracking, computing Mean Average Precision ($mAP_{50}$, $mAP_{50:95}$).
-- **Tracking Evaluator**: Evaluates end-to-end video tracking performance, computing Multi-Object Tracking Accuracy ($MOTA$), Identification F1 score ($IDF1$), and ID switch counts ($IDSW$).
-- **Model Exporter**: Translates model computation graphs and weights into standardized, runtime-agnostic formats (e.g., ONNX) for deployment outside the primary development environment.
+### 3.4 Execution & Evaluation Subsystem (`src/engine/`)
+- **Trainer**: Manages device transfer (CUDA/CPU), forward pass, multi-loss accumulation, backpropagation, and learning rate scheduling. Emits decoupled `EpochProgress` events.
+- **CheckpointManager**: Serializes model weights, optimizer momentum, scheduler states, and metadata for exact resumption.
+- **DetectorEvaluator**: Computes $AP_{50}$ and $mAP_{50:95}$ across test sets using standard 11-point interpolated Precision-Recall curves.
+
+### 3.5 Export Subsystem (`src/export/`)
+- **`export_detector_to_onnx`**: Serializes Faster R-CNN with dynamic spatial axes (`[1, 3, height, width]`).
+- **`export_reid_to_onnx`**: Serializes ReID embedder with dynamic batch axis (`[batch_size, 3, 128, 64] -> [batch_size, 576]`).
+- **`verify_onnx_model`**: Runs graph validation via `onnx.checker`.
 
 ---
 
-## 4. Core Workflows
+## 4. CLI & IPC Interface (`main.py`)
 
-### 4.1 Training & State Resumption Workflow
-```
-[Start Session]
-      │
-      ├── Mode: Fresh Training
-      │     └── Initialize weights from pretrained base
-      │     └── Initialize new optimizer & learning rate scheduler
-      │
-      └── Mode: Resume Training
-            └── Load checkpoint
-            └── Restore model weights
-            └── Restore optimizer momentum buffers
-            └── Restore scheduler state and start epoch
-      │
-      ▼
-[Training Loop (Epoch by Epoch)]
-      │
-      ├── Forward pass on training batches
-      ├── Aggregate detection losses
-      ├── Backward pass & gradient updates
-      └── Evaluate validation loss
-      │
-      ▼
-[Checkpoint Serialization]
-      ├── Full State Checkpoint (Weights + Optimizer + Scheduler + Epoch)
-      └── Best Performance Checkpoint (Saved on metric improvements)
+All commands support human-readable terminal output and `--json` streaming:
+
+```bash
+# Session Management
+xvisor session --name "my-experiment" --arch mobilenet_v3
+xvisor session --list [--json]
+xvisor session --resume <session_id>
+
+# Training & Resumption
+xvisor train --session <id> --data <path> --annotations <path> --epochs 10 [--json]
+xvisor train --session <id> --data <path> --annotations <path> --epochs 5 --resume [--json]
+
+# Accuracy Evaluation (mAP)
+xvisor test --session <id> --data <path> --annotations <path> [--json]
+
+# Export to ONNX
+xvisor export --session <id> [-o custom/output/dir] [--json]
 ```
 
-### 4.2 Decoupled Evaluation Workflow
-```
-                   [Trained Checkpoint]
-                            │
-            ┌───────────────┴───────────────┐
-            ▼                               ▼
-  [Detection Evaluation]          [Tracking Evaluation]
-  - Requires: Images + Boxes      - Requires: Ordered video frames + Track IDs
-  - Ignores temporal consistency  - Evaluates temporal track identity
-  - Output: mAP50, mAP50:95       - Output: MOTA, IDF1, ID Switches
-```
+---
 
-### 4.3 Export & External Deployment Workflow
-```
-[PyTorch Checkpoint]
-        │
-        ▼
-[Model Exporter] ──► Trace computation graph with dummy input
-        │
-        ▼
-[Portable Format (.onnx)]
-        │
-        ├──────────────────────┬──────────────────────┐
-        ▼                      ▼                      ▼
- [C++ / Native App]      [C# / .NET App]       [Web / Browser]
- (via ONNX Runtime)     (via ONNX Runtime)   (via ONNX Runtime Web)
-```
+## 5. Automated CI Testing (`.github/workflows/ci.yml`)
+
+- **`Tests` (`ci.yml`)**: Automated Linux test suite running on `ubuntu-latest` on every push to `main` and on pull requests.
+- Employs Poetry virtualenv caching to keep execution times under 30 seconds.
